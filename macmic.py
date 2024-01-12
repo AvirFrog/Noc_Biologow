@@ -63,15 +63,6 @@ class Dot(pygame.sprite.Sprite):
 
         if self.killswitch_on:
             self.cycles_to_fate -= 1
-            # if self.cycles_to_fate == 0:
-            #     self.kill()
-            # self.killswitch_on = False
-            # some_number = np.random.rand()
-            # if self.mortality_rate > some_number:
-            #     self.kill()
-            # else:
-            #     self.recovered = True
-
 
     def respawn(self, color, radius=10, offset=5):
         return Dot(
@@ -89,23 +80,8 @@ class Dot(pygame.sprite.Sprite):
         self.cycles_to_fate = cycles_to_fate
         self.mortality_rate = mortality_rate
 
-    #     if self.killswitch_on_vir:
-    #         self.cycles_to_fate_vir -= 1
-    #         if self.cycles_to_fate_vir == 0:
-    #             self.kill()
-    #         self.killswitch_on_vir = False
-    #         some_number = np.random.rand()
-    #         if self.mortality_rate_vir > some_number:
-    #             self.kill()
-    #
-    #
-    # def killswitch_virus(self, cycles_to_fate=20, mortality_rate=0.2):
-    #     self.killswitch_on_vir = True
-    #     self.cycles_to_fate_vir = cycles_to_fate
-    #     self.mortality_rate_vir = mortality_rate
-
 class Simulation:
-    def __init__(self, width=1280, height=720):
+    def __init__(self, width=1600, height=900):
         self.WIDTH = width
         self.HEIGHT = height
         self.virus_lifecycles_range = (50, 100)
@@ -154,18 +130,13 @@ class Simulation:
             x = np.random.randint(0, self.WIDTH + 1)
             y = np.random.randint(0, self.HEIGHT + 1)
             vel = np.random.rand(2) * 2 - 1
-            guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=RED, velocity=vel, radius=3, randomize=randomize)
+            guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=RED, velocity=vel, radius=4, randomize=randomize)
             guy.killswitch(random.randint(self.virus_lifecycles_range[0], self.virus_lifecycles_range[1]),
                            self.mortality_rate)
             # dodalem linie nzej
             #guy.killswitch(self.cycle_to_fate, self.mortality_rate)
             self.virus_container.add(guy)
             self.all_container.add(guy)
-
-        # stats = pygame.Surface((self.WIDTH//4, self.HEIGHT//4))
-        # stats.fill(GREEN)
-        # stats.set_alpha(230)
-        # stats_pos = (self.WIDTH//40, self.HEIGHT//40)
 
         clock = pygame.time.Clock()
 
@@ -178,27 +149,6 @@ class Simulation:
             self.all_container.update()
             screen.fill(BACKGROUND)
 
-            # Update stats
-            # stats_height = stats.get_height()
-            # stats_widht = stats.get_width()
-            # n_inf_now = len(self.infected_container)
-            # n_pop_now = len(self.all_container)
-            # n_rec_now = len(self.recovered_container)
-            # t = int((i / self.T)*stats_widht)
-            # y_infect = int(
-            #     stats_height - (n_inf_now / n_pop_now) * stats_height
-            # )
-            # y_dead = int(
-            #     ((self.N - n_pop_now) / self.N) * stats_height
-            # )
-            # y_recovered = int((n_rec_now / n_pop_now) * stats_height)
-            # stats_graph = pygame.PixelArray(stats)
-            # stats_graph[t, y_infect:] = pygame.Color(*RED)
-            # stats_graph[t, :y_dead] = pygame.Color(*BLUE)
-            # stats_graph[
-            #     t, y_dead : y_dead + y_recovered
-            # ] = pygame.Color(*YELLOW)
-
             # New infections
             collision_group = pygame.sprite.groupcollide(
                 self.virus_container,
@@ -206,12 +156,6 @@ class Simulation:
                 False,
                 True)
 
-            # for guy in collision_group:
-            #     new_guy = guy.respawn(YELLOW)
-            #     new_guy.vel *= -1
-            #     new_guy.killswitch(self.cycle_to_fate, self.mortality_rate)
-            #     self.bacteria_infected_container.add(new_guy)
-            #     self.all_container.add(new_guy)
             for virus in collision_group:
                 for bacteria in collision_group[virus]:
                     new_bacteria = bacteria.respawn(YELLOW)
@@ -223,23 +167,12 @@ class Simulation:
                 self.virus_container.remove(virus)
                 self.all_container.remove(virus)
 
-            # Any recoveries
-
-            # recovered = []
-            # for guy in self.infected_container:
-            #     if guy.recovered:
-            #         new_guy = guy.respawn(YELLOW)
-            #         self.recovered_container.add(new_guy)
-            #         self.all_container.add(new_guy)
-            #         recovered.append(guy)
-            # if len(recovered) > 0:
-            #     self.infected_container.remove(*recovered)
-            #     self.all_container.remove(*recovered)
-
             for guy in self.bacteria_infected_container:
                 if guy.killswitch_on and guy.cycles_to_fate == 0:
-                    for _ in range(int(np.random.uniform(1, 4))):  # Spawn red dots
-                        new_guy = guy.respawn(RED, radius=3)
+                    for _ in range(
+                            int(np.random.uniform(self.virions_count[0],
+                                                  self.virions_count[1]))):  # Spawn red dots  # Spawn red dots
+                        new_guy = guy.respawn(RED, radius=4)
                         new_guy.killswitch_on = False
                         new_guy.pos = np.array([np.random.uniform(guy.rect.x - 20, guy.rect.x + 20),
                                                 np.random.uniform(guy.rect.y - 20, guy.rect.y + 20)], dtype=np.float64)
@@ -263,9 +196,6 @@ class Simulation:
 
             self.all_container.draw(screen)
 
-            # del stats_graph
-            # stats.unlock()
-            # screen.blit(stats, stats_pos)
             pygame.display.flip()
             clock.tick(30)
         pygame.quit()
@@ -273,12 +203,12 @@ class Simulation:
 
 if __name__ == '__main__':
     covid = Simulation()
-    covid.n_susceptible = 400
+    covid.n_susceptible = 200
     covid.n_quarantined = 0
     covid.n_infected = 3
     covid.T = 1500
     covid.cycle_to_fate = 150
     covid.mortality_rate = 0.8
-    covid.virions_count = (2, 4)
-    covid.virus_lifecycles_range = (150, 250)
+    covid.virions_count = (1, 6)
+    covid.virus_lifecycles_range = (200, 250)
     covid.start(randomize=True)
