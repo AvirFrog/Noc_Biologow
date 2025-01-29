@@ -19,23 +19,37 @@ BACKGROUND = BLACK
 
 
 class Dot(pygame.sprite.Sprite):
-    def __init__(self, x, y, width, height, color=GREEN, radius=10, velocity=[0, 0], randomize=False):
+    def __init__(self, x, y, parent_surface, width, height, containers, rng = None):
         super().__init__()
-        self.image = pygame.Surface([radius * 2, radius * 2])
-        self.image.fill((0, 0, 0, 0))
-        pygame.draw.circle(self.image, color, (radius, radius), radius)
-        self.image.set_colorkey((0, 0, 0, 0))
-        self.rect = self.image.get_rect()
+
+        if not rng:
+            self.rng = np.random.default_rng()
+        else:
+            self.rng = rng
+
+        self.image = pygame.Surface((width, height))
+        self.image = self.image.convert_alpha()
+
         self.pos = np.array([x, y], dtype=np.float64)
-        self.vel = np.asarray(velocity, dtype=np.float64)
+        self.rect = self.image.get_rect(center=self.pos)
+        self.vel = np.asarray([0, 0], dtype=np.float64)
 
-        self.killswitch_on = False
-        self.recovered = False
-        self.randomize = randomize
+        self.parent_surface = parent_surface
 
-        self.WIDTH = width
-        self.HEIGHT = height
+        containers = list(containers)
+        self.containers = containers
+        self.add(*containers)
 
+    def move_containers(self, containers, replace=True):
+        containers = list(containers)
+
+        if replace:
+            self.containers = containers
+        else:
+            self.containers.extend(containers)
+
+        self.kill()    # This merely removes sprite from all groups so it can then be re-added, don't worry
+        self.add(*self.containers)
 
     def update(self):
         self.pos += self.vel
@@ -59,47 +73,128 @@ class Dot(pygame.sprite.Sprite):
         self.rect.y = y
 
         # Brownian
-        # velocity = previous_velocity + sqrt(time_difference) * value_from_normal_distribution(mean, std_dev)
+        #old_vel = self.vel.copy()
+
+        change = self.rng.uniform(-1, 1, 2)
+        change = (change[0]/np.sqrt(change[0]**2 + change[1]**2), change[1]/np.sqrt(change[0]**2 + change[1]**2))
+        self.vel = change
+
+        #vel_norm = np.linalg.norm(self.vel)
+        #if vel_norm > 5:
+        #    self.vel = old_vel
+
+class Bacteria(Dot):
+    def __init__(self, x, y, surface, containers, rng=None):
+        super().__init__(x, y, surface, 20, 20, containers, rng)
+
+        self.__draw()
+
+        self.deathclock = None
+
+    def __draw(self, color=GREEN):
+        self.image.fill((0,0,0,0))
+        pygame.draw.circle(self.image, color, (10, 10), 10, 10)
+
+    def infect(self, deathclock=30):
+        self.deathclock = deathclock
+        self.__draw(color=YELLOW)
+
+    def update(self):
+        self.pos += self.vel
+        x, y = self.pos
+        s_x, s_y = self.parent_surface.get_size()
+
+        # Periodic boundary conditions
+        if x < 0:
+            x += s_x
+        if x > s_x:
+            x -= s_x
+        if y < 0:
+            y += s_y
+        if y > s_y:
+            y -= s_y
+
+        self.pos = np.asarray([x, y], dtype=np.float64)
+        self.rect = self.image.get_rect(center=(x, y))
+
+        # Brownian
         old_vel = self.vel.copy()
-        self.vel += np.sqrt(1) * np.random.standard_normal(2)
+
+        change = self.rng.uniform(-1, 1, 2)
+        change = (change[0]/np.sqrt(change[0]**2 + change[1]**2), change[1]/np.sqrt(change[0]**2 + change[1]**2))
+        self.vel += change
 
         vel_norm = np.linalg.norm(self.vel)
-        if vel_norm > 5:
+        if vel_norm > 3:
             self.vel = old_vel
 
-        '''
-        if self.randomize:
-            self.vel += np.random.rand(2) * 2 - 1
-        '''
+        if self.deathclock != None:
 
-        if self.killswitch_on:
-            self.cycles_to_fate -= 1
+            if self.deathclock == 0:
+                self.kill()
+                return 1
 
-    def respawn(self, color, radius=10, offset=5):
-        return Dot(
-            self.rect.x,
-            self.rect.y,
-            self.WIDTH,
-            self.HEIGHT,
-            color=color,
-            radius=radius,
-            velocity=self.vel,
-        )
+            self.deathclock -= 1
 
-    def killswitch(self, cycles_to_fate=20, mortality_rate=0.2):
-        self.killswitch_on = True
-        self.cycles_to_fate = cycles_to_fate
-        self.mortality_rate = mortality_rate
+class Virion(Dot):
+    def __init__(self, x, y, surface, containers, rng=None):
+        super().__init__(x, y, surface, 10, 10, containers, rng)
+
+        self.__draw()
+
+        self.deathclock = self.rng.integers(50, 100, endpoint=True)
+
+    def __draw(self, color=RED):
+        self.image.fill((0,0,0,0))
+        pygame.draw.circle(self.image, color, (5, 5), 5, 5)
+
+    def update(self):
+        self.pos += self.vel
+        x, y = self.pos
+        s_x, s_y = self.parent_surface.get_size()
+
+        # Periodic boundary conditions
+        if x < 0:
+            x += s_x
+        if x > s_x:
+            x -= s_x
+        if y < 0:
+            y += s_y
+        if y > s_y:
+            y -= s_y
+
+        self.pos = np.asarray([x, y], dtype=np.float64)
+        self.rect = self.image.get_rect(center=(x, y))
+
+        # Brownian
+        old_vel = self.vel.copy()
+
+        change = self.rng.uniform(-1, 1, 2)
+        change = (change[0]/np.sqrt(change[0]**2 + change[1]**2), change[1]/np.sqrt(change[0]**2 + change[1]**2))
+        self.vel += change
+
+        vel_norm = np.linalg.norm(self.vel)
+        if vel_norm > 6:
+            self.vel = old_vel
+
+        if self.deathclock != None:
+            if self.deathclock == 0:
+                self.kill()
+                return 0
+
+            self.deathclock -= 1
 
 
 class Simulation:
     def __init__(self, width=1600, height=900):
 
+        self.rng = np.random.default_rng()
+
         self.WIDTH = width	# window width
         self.HEIGHT = height	# window height
 
-        self.virus_lifecycles_range = (50, 100)
-        self.virions_count = (2, 6)
+        #self.virus_lifecycles_range = (50, 100)
+        #self.virions_count = (2, 6)
 
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption('Symulacja infekcji wirusowej w kolonii bakteryjnej')
@@ -111,59 +206,63 @@ class Simulation:
 
         self.n_susceptible = 20
         self.n_infected = 1
-        self.n_quarantined = 0
-        self.T = 1000    # !!! Obsolete (main loop is infinite)
-        self.cycle_to_fate = 20
-        self.mortality_rate = 1
+        #self.n_quarantined = 0
+        #self.cycle_to_fate = 20
+        #self.mortality_rate = 1
 
-    def start(self, randomize=False):
+    def start(self):
 
-        self.N = self.n_susceptible + self.n_infected + self.n_quarantined
+        self.N = self.n_susceptible + self.n_infected #+ self.n_quarantined
 
         pygame.init()
         screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
         pygame.display.set_caption('Symulacja rozwoju wirusa w koloniii bakteryjnej')
 
-        for i in range(self.n_susceptible):
-            x = np.random.randint(0, self.WIDTH + 1)
-            y = np.random.randint(0, self.HEIGHT + 1)
-            #vel = np.random.rand(2) * 2 - 1 ???
-            vel = (0,0)
-            guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=GREEN, velocity=vel, randomize=randomize)
-            self.susceptible_container.add(guy)
-            self.all_container.add(guy)
+        for _ in range(self.n_susceptible):    # Spawn bacteria
+            x = self.rng.integers(0, self.WIDTH, endpoint=True)
+            y = self.rng.integers(0, self.HEIGHT, endpoint=True)
 
+            Bacteria(x, y, screen, containers=[self.susceptible_container,
+                                               self.all_container], rng=self.rng)
+
+        '''
         for i in range(self.n_quarantined):
             x = np.random.randint(0, self.WIDTH + 1)
             y = np.random.randint(0, self.HEIGHT + 1)
             vel = [0, 0]
-            guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=GREEN, velocity=vel, randomize=False)
+            guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=GREEN, velocity=vel)
             self.susceptible_container.add(guy)
             self.all_container.add(guy)
+        '''
 
-        for i in range(self.n_infected):
-            x = np.random.randint(0, self.WIDTH + 1)
-            y = np.random.randint(0, self.HEIGHT + 1)
-            vel = np.random.rand(2) * 2 - 1
-            guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=RED, velocity=vel, radius=4, randomize=randomize)
-            guy.killswitch(random.randint(self.virus_lifecycles_range[0], self.virus_lifecycles_range[1]),
-                           self.mortality_rate)
-            # dodalem linie nzej
-            #guy.killswitch(self.cycle_to_fate, self.mortality_rate)
-            self.virus_container.add(guy)
-            self.all_container.add(guy)
+        for _ in range(self.n_infected):    # Spawn virions
+            x = self.rng.integers(0, self.WIDTH, endpoint=True)
+            y = self.rng.integers(0, self.HEIGHT, endpoint=True)
+            Virion(x, y, screen, containers=[self.virus_container,
+                                             self.all_container], rng=self.rng)
 
         clock = pygame.time.Clock()
 
         # Main loop
         while True:
-        #for i in range(self.T):
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:    # If "X" button was clicked, end the program
                     sys.exit()
 
 
-            self.all_container.update()    # Call .update() method on all sprites
+            for sprite in self.all_container:    # Call .update() method on all sprites
+                action = sprite.update()
+                if action and sprite.__class__ == Bacteria:
+                    for _ in range(self.rng.integers(2,6)):  # Spawn virions
+                        Virion(self.rng.integers(sprite.rect.left,
+                                                 sprite.rect.right,
+                                                 endpoint=True),
+                               self.rng.integers(sprite.rect.top,
+                                                 sprite.rect.bottom,
+                                                 endpoint=True),
+                               screen,
+                               [self.virus_container, self.all_container])
+
             screen.fill(BACKGROUND)        # Fill screen with background color (erases all objects)
 
 
@@ -177,46 +276,13 @@ class Simulation:
                 True)    # removes bacteria that collided from suspectible_container
 
             for virus in collision_group:    # Loop over viruses that collided with anything
-                for bacteria in collision_group[virus]:    # Loop over all bacteria that collided with current virus. !!! TODO: we shouldn't loop over all, single virion can only infect one bacteria
+                bacteria = collision_group[virus][0]    # Select first bacteria that collided and infect it
 
-                    new_bacteria = bacteria.respawn(YELLOW)   # Spawn a new, yellow bacteria replacing the one removed
-                    new_bacteria.vel *= -1
-                    new_bacteria.killswitch(self.cycle_to_fate, self.mortality_rate)    # Set this new bacteria's internal counter until death
-                    self.bacteria_infected_container.add(new_bacteria)
-                    self.all_container.add(new_bacteria)
+                bacteria.infect()
+                bacteria.move_containers([self.bacteria_infected_container,
+                                          self.all_container])
 
                 virus.kill()
-                self.virus_container.remove(virus)    # !!! Obsolete
-                self.all_container.remove(virus)     # !!! Obsolete
-
-
-            for guy in self.bacteria_infected_container:
-                if guy.killswitch_on and guy.cycles_to_fate == 0:
-                    for _ in range(
-                            int(np.random.uniform(self.virions_count[0],
-                                                  self.virions_count[1]))):  # Spawn red dots
-                        new_guy = guy.respawn(RED, radius=4)
-                        new_guy.killswitch_on = False
-                        new_guy.pos = np.array([np.random.uniform(guy.rect.x - 20, guy.rect.x + 20),
-                                                np.random.uniform(guy.rect.y - 20, guy.rect.y + 20)], dtype=np.float64)
-                        new_guy.vel = np.array([np.random.uniform(-1, 0.1), np.random.uniform(-1, 0.1)],
-                                               dtype=np.float64)
-                        new_guy.randomize = True
-
-                        #print(random.randint(self.virus_lifecycles_range[0], self.virus_lifecycles_range[1]))
-                        new_guy.killswitch(
-                            random.randint(self.virus_lifecycles_range[0], self.virus_lifecycles_range[1]),
-                            self.mortality_rate)
-                        self.virus_container.add(new_guy)
-                        self.all_container.add(new_guy)
-                    self.bacteria_infected_container.remove(guy)
-                    self.all_container.remove(guy)
-            # self.all_container.update()
-
-            for guy in self.virus_container:
-                if guy.killswitch_on and guy.cycles_to_fate == 0:
-                    guy.kill()
-                    self.virus_container.remove(guy)
 
             self.all_container.draw(screen)
 
@@ -226,13 +292,12 @@ class Simulation:
 
 
 if __name__ == '__main__':
-    covid = Simulation()
-    covid.n_susceptible = 200
-    covid.n_quarantined = 0
-    covid.n_infected = 3
-    covid.T = 1500    # !!! Obsolete (main loop is infinite)
-    covid.cycle_to_fate = 150
-    covid.mortality_rate = 0.8
-    covid.virions_count = (1, 6)
-    covid.virus_lifecycles_range = (200, 250)
-    covid.start(randomize=True)
+    bacteriophage = Simulation()
+    bacteriophage.n_susceptible = 200
+    #bacteriophage.n_quarantined = 0
+    bacteriophage.n_infected = 3
+    #bacteriophage.cycle_to_fate = 150
+    #bacteriophage.mortality_rate = 0.8
+    #bacteriophage.virions_count = (1, 6)
+    #bacteriophage.virus_lifecycles_range = (200, 250)
+    bacteriophage.start()
