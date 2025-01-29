@@ -1,15 +1,18 @@
-import pygame
 import sys
+import os
 import numpy as np
 import random
 
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"    # Do not print pygame welcome message into console (has to be set before importing pygame)
+import pygame
+
+# Color definitions in RGB
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 BLUE = (0, 0, 255)
 YELLOW = (255, 255, 0)
-
 GRAY = (128, 128, 128)
 
 BACKGROUND = BLACK
@@ -33,6 +36,7 @@ class Dot(pygame.sprite.Sprite):
         self.WIDTH = width
         self.HEIGHT = height
 
+
     def update(self):
         self.pos += self.vel
         x, y = self.pos
@@ -54,12 +58,19 @@ class Dot(pygame.sprite.Sprite):
         self.rect.x = x
         self.rect.y = y
 
-        vel_norm = np.linalg.norm(self.vel)
-        if vel_norm > 3:
-            self.vel /= vel_norm
+        # Brownian
+        # velocity = previous_velocity + sqrt(time_difference) * value_from_normal_distribution(mean, std_dev)
+        old_vel = self.vel.copy()
+        self.vel += np.sqrt(1) * np.random.standard_normal(2)
 
+        vel_norm = np.linalg.norm(self.vel)
+        if vel_norm > 5:
+            self.vel = old_vel
+
+        '''
         if self.randomize:
             self.vel += np.random.rand(2) * 2 - 1
+        '''
 
         if self.killswitch_on:
             self.cycles_to_fate -= 1
@@ -80,15 +91,18 @@ class Dot(pygame.sprite.Sprite):
         self.cycles_to_fate = cycles_to_fate
         self.mortality_rate = mortality_rate
 
+
 class Simulation:
     def __init__(self, width=1600, height=900):
-        self.WIDTH = width
-        self.HEIGHT = height
+
+        self.WIDTH = width	# window width
+        self.HEIGHT = height	# window height
+
         self.virus_lifecycles_range = (50, 100)
         self.virions_count = (2, 6)
 
         self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption('Gra')
+        pygame.display.set_caption('Symulacja infekcji wirusowej w kolonii bakteryjnej')
 
         self.susceptible_container = pygame.sprite.Group()
         self.virus_container = pygame.sprite.Group()
@@ -98,7 +112,7 @@ class Simulation:
         self.n_susceptible = 20
         self.n_infected = 1
         self.n_quarantined = 0
-        self.T = 1000
+        self.T = 1000    # !!! Obsolete (main loop is infinite)
         self.cycle_to_fate = 20
         self.mortality_rate = 1
 
@@ -108,12 +122,13 @@ class Simulation:
 
         pygame.init()
         screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
-        pygame.display.set_caption('Gra')
+        pygame.display.set_caption('Symulacja rozwoju wirusa w koloniii bakteryjnej')
 
         for i in range(self.n_susceptible):
             x = np.random.randint(0, self.WIDTH + 1)
             y = np.random.randint(0, self.HEIGHT + 1)
-            vel = np.random.rand(2) * 2 - 1
+            #vel = np.random.rand(2) * 2 - 1 ???
+            vel = (0,0)
             guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=GREEN, velocity=vel, randomize=randomize)
             self.susceptible_container.add(guy)
             self.all_container.add(guy)
@@ -140,38 +155,46 @@ class Simulation:
 
         clock = pygame.time.Clock()
 
+        # Main loop
         while True:
         #for i in range(self.T):
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
+                if event.type == pygame.QUIT:    # If "X" button was clicked, end the program
                     sys.exit()
 
-            self.all_container.update()
-            screen.fill(BACKGROUND)
 
-            # New infections
+            self.all_container.update()    # Call .update() method on all sprites
+            screen.fill(BACKGROUND)        # Fill screen with background color (erases all objects)
+
+
+            ## New infections
+
+            # Find all viruses & non-immune bacteria which collided
             collision_group = pygame.sprite.groupcollide(
                 self.virus_container,
                 self.susceptible_container,
                 False,
-                True)
+                True)    # removes bacteria that collided from suspectible_container
 
-            for virus in collision_group:
-                for bacteria in collision_group[virus]:
-                    new_bacteria = bacteria.respawn(YELLOW)
+            for virus in collision_group:    # Loop over viruses that collided with anything
+                for bacteria in collision_group[virus]:    # Loop over all bacteria that collided with current virus. !!! TODO: we shouldn't loop over all, single virion can only infect one bacteria
+
+                    new_bacteria = bacteria.respawn(YELLOW)   # Spawn a new, yellow bacteria replacing the one removed
                     new_bacteria.vel *= -1
-                    new_bacteria.killswitch(self.cycle_to_fate, self.mortality_rate)
+                    new_bacteria.killswitch(self.cycle_to_fate, self.mortality_rate)    # Set this new bacteria's internal counter until death
                     self.bacteria_infected_container.add(new_bacteria)
                     self.all_container.add(new_bacteria)
+
                 virus.kill()
-                self.virus_container.remove(virus)
-                self.all_container.remove(virus)
+                self.virus_container.remove(virus)    # !!! Obsolete
+                self.all_container.remove(virus)     # !!! Obsolete
+
 
             for guy in self.bacteria_infected_container:
                 if guy.killswitch_on and guy.cycles_to_fate == 0:
                     for _ in range(
                             int(np.random.uniform(self.virions_count[0],
-                                                  self.virions_count[1]))):  # Spawn red dots  # Spawn red dots
+                                                  self.virions_count[1]))):  # Spawn red dots
                         new_guy = guy.respawn(RED, radius=4)
                         new_guy.killswitch_on = False
                         new_guy.pos = np.array([np.random.uniform(guy.rect.x - 20, guy.rect.x + 20),
@@ -179,7 +202,8 @@ class Simulation:
                         new_guy.vel = np.array([np.random.uniform(-1, 0.1), np.random.uniform(-1, 0.1)],
                                                dtype=np.float64)
                         new_guy.randomize = True
-                        print(random.randint(self.virus_lifecycles_range[0], self.virus_lifecycles_range[1]))
+
+                        #print(random.randint(self.virus_lifecycles_range[0], self.virus_lifecycles_range[1]))
                         new_guy.killswitch(
                             random.randint(self.virus_lifecycles_range[0], self.virus_lifecycles_range[1]),
                             self.mortality_rate)
@@ -206,7 +230,7 @@ if __name__ == '__main__':
     covid.n_susceptible = 200
     covid.n_quarantined = 0
     covid.n_infected = 3
-    covid.T = 1500
+    covid.T = 1500    # !!! Obsolete (main loop is infinite)
     covid.cycle_to_fate = 150
     covid.mortality_rate = 0.8
     covid.virions_count = (1, 6)
