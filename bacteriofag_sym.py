@@ -1,23 +1,44 @@
 import sys
 import os
 import numpy as np
-import random
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"    # Do not print pygame welcome message into console (has to be set before importing pygame)
 import pygame
 
-# Color definitions in RGB
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-RED = (255, 0, 0)
-GREEN = (0, 255, 0)
-BLUE = (0, 0, 255)
-YELLOW = (255, 255, 0)
-GRAY = (128, 128, 128)
+# List of colors:
+# python3 -c "import pygame; print('\\n'.join([i + '\\t\\t' + str(v) for i,v in pygame.color.THECOLORS.items()]))"
+def col(name):
+	return pygame.color.THECOLORS[name]
 
-BACKGROUND = BLACK
+def precise_collision(sprite1, sprite2):
+    hitbox1 = sprite1.rect
+    hitbox2 = sprite2.rect
+
+    if hasattr(sprite1, 'colliderect'): hitbox1 = sprite1.colliderect
+    if hasattr(sprite2, 'colliderect'): hitbox2 = sprite2.colliderect
+
+    return hitbox1.colliderect(hitbox2)
 
 
+# Class for compact storage of images
+class Graphics:
+    def __init__(self, path="Images/"):
+        # Import all images and convert them to same format as display surface, with alpha channel
+
+        self.phage = pygame.image.load(path+"Bacteriophage.png")  # Virion image
+        self.phage = self.phage.convert_alpha()
+        self.phage = self.colorize(self.phage, col("red"))  # Color red
+
+
+    @staticmethod
+    def colorize(image, color): # Recolors image
+        image = image.copy()
+
+        image.fill(color, None, pygame.BLEND_RGB_MULT)
+
+        return image
+
+# Parent class for bacteria and virions
 class Dot(pygame.sprite.Sprite):
     def __init__(self, x, y, parent_surface, width, height, containers, rng = None):
         super().__init__()
@@ -51,6 +72,14 @@ class Dot(pygame.sprite.Sprite):
         self.kill()    # This merely removes sprite from all groups so it can then be re-added, don't worry
         self.add(*self.containers)
 
+    def __fix_color(self, color):
+        if 3 > len(color) > 4:
+            raise ValueError("Invalid length of color array.")
+
+        color = pygame.Color([min(255, max(0,int(component))) for component in color])
+
+        return color
+
     def update(self):
         self.pos += self.vel
         x, y = self.pos
@@ -73,31 +102,63 @@ class Dot(pygame.sprite.Sprite):
         self.rect.y = y
 
         # Brownian
-        #old_vel = self.vel.copy()
+        old_vel = self.vel.copy()
 
         change = self.rng.uniform(-1, 1, 2)
         change = (change[0]/np.sqrt(change[0]**2 + change[1]**2), change[1]/np.sqrt(change[0]**2 + change[1]**2))
         self.vel = change
 
-        #vel_norm = np.linalg.norm(self.vel)
-        #if vel_norm > 5:
-        #    self.vel = old_vel
+        vel_norm = np.linalg.norm(self.vel)
+        if vel_norm > 5:
+            self.vel = old_vel
 
 class Bacteria(Dot):
     def __init__(self, x, y, surface, containers, rng=None):
         super().__init__(x, y, surface, 20, 20, containers, rng)
 
+        # Randomized shape
+        R = pygame.Rect(0,0, self.rect.width, self.rect.height)
+        cell_l = self.rng.integers(0, R.center[0]//2, endpoint=True)
+        cell_t = self.rng.integers(0, R.center[1]//2, endpoint=True)
+
+        max_w = min(R.width, R.right - cell_l)
+        max_h = min(R.height, R.bottom - cell_t, max_w*4//3)
+
+        cell_w = self.rng.integers(R.width*3//4, max_w, endpoint=True)
+        cell_h = self.rng.integers(R.height*3//4, max_h, endpoint=True)
+
+        self.membrane = pygame.Rect(cell_l, cell_t, cell_w, cell_h)
+        self.cytoplasm = self.membrane.copy()
+        self.cytoplasm.top += 3
+        self.cytoplasm.left += 3
+        self.cytoplasm.width -= 6
+        self.cytoplasm.height -= 6
+
+        # Special hitbox
+        self.offset = np.asarray([self.membrane.center[0] - R.center[0],
+                                  self.membrane.center[1] - R.center[1]],
+                                 dtype=np.float64)
+
+        self.colliderect = self.membrane.copy()
+        self.colliderect.center = self.pos + self.offset
+
         self.__draw()
 
         self.deathclock = None
 
-    def __draw(self, color=GREEN):
+    def __draw(self, color=col("green")):
+
+        if len(color) < 3: color = list(color + [255])
+        dark = tuple([i*2//3 for idx, i in enumerate(color) if idx < 3] + [color[3]])
+        even_darker = tuple([i*2//3 for idx, i in enumerate(dark) if idx < 3] + [dark[3]])
+
         self.image.fill((0,0,0,0))
-        pygame.draw.circle(self.image, color, (10, 10), 10, 10)
+        pygame.draw.ellipse(self.image, dark, self.membrane)
+        pygame.draw.ellipse(self.image, color, self.cytoplasm)
 
     def infect(self, deathclock=30):
         self.deathclock = deathclock
-        self.__draw(color=YELLOW)
+        self.__draw(color=col("yellow"))
 
     def update(self):
         self.pos += self.vel
@@ -115,7 +176,8 @@ class Bacteria(Dot):
             y -= s_y
 
         self.pos = np.asarray([x, y], dtype=np.float64)
-        self.rect = self.image.get_rect(center=(x, y))
+        self.rect.center = self.pos
+        self.colliderect.center = self.pos + self.offset
 
         # Brownian
         old_vel = self.vel.copy()
@@ -137,16 +199,27 @@ class Bacteria(Dot):
             self.deathclock -= 1
 
 class Virion(Dot):
-    def __init__(self, x, y, surface, containers, rng=None):
-        super().__init__(x, y, surface, 10, 10, containers, rng)
+    def __init__(self, x, y, surface, containers, graphics, rng=None):
+        # Apply defaults from Dot class
+        super().__init__(x, y, surface, 19, 19, containers, rng)
 
+        # Special collision box
+        self.colliderect = pygame.Rect(0, 0, 15, 15)
+        self.colliderect.center = self.pos - np.asarray([2,2], dtype=np.float64)
+
+        # Custom graphics
+        self.phage = graphics.phage.copy()
+        self.rotation = self.rng.choice(tuple(range(-175, 181, 15)))
+        self.rotation_speed = self.rng.choice((-15, 15))
         self.__draw()
 
+        # Add timers
+        self.lifetime = 0
         self.deathclock = self.rng.integers(50, 100, endpoint=True)
 
-    def __draw(self, color=RED):
+    def __draw(self, color=col("red")):
         self.image.fill((0,0,0,0))
-        pygame.draw.circle(self.image, color, (5, 5), 5, 5)
+        self.image.blit(pygame.transform.rotate(self.phage, self.rotation), (0,0))
 
     def update(self):
         self.pos += self.vel
@@ -164,7 +237,8 @@ class Virion(Dot):
             y -= s_y
 
         self.pos = np.asarray([x, y], dtype=np.float64)
-        self.rect = self.image.get_rect(center=(x, y))
+        self.rect.center = self.pos
+        self.colliderect.center = self.pos - np.asarray([2,2], dtype=np.float64)
 
         # Brownian
         old_vel = self.vel.copy()
@@ -174,8 +248,16 @@ class Virion(Dot):
         self.vel += change
 
         vel_norm = np.linalg.norm(self.vel)
-        if vel_norm > 6:
+
+        # Speed limit - if pythagorean distance expressed by velocity vector is too high, revert it
+        if vel_norm > 5:
             self.vel = old_vel
+
+
+        # Rotation
+        if self.lifetime % 5 == 0:
+            self.rotation += self.rotation_speed
+            self.__draw()
 
         if self.deathclock != None:
             if self.deathclock == 0:
@@ -184,10 +266,13 @@ class Virion(Dot):
 
             self.deathclock -= 1
 
+        self.lifetime += 1
+
 
 class Simulation:
-    def __init__(self, width=1600, height=900):
+    def __init__(self, width=1600, height=900, debug=False):
 
+        self.debug = debug
         self.rng = np.random.default_rng()
 
         self.WIDTH = width	# window width
@@ -196,13 +281,19 @@ class Simulation:
         #self.virus_lifecycles_range = (50, 100)
         #self.virions_count = (2, 6)
 
-        self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption('Symulacja infekcji wirusowej w kolonii bakteryjnej')
+        # Smh there is no actually very dark blue in pygame's set, so here's some dark aqua
+        self.bgcol = (5, 30, 40, 255)
+
+        self.screen = pygame.display.set_mode((width, height), flags=pygame.HIDDEN)
+        self.screen.fill(self.bgcol)
+        pygame.display.set_caption('Symulacja rozwoju wirusa w kolonii bakteryjnej')
 
         self.susceptible_container = pygame.sprite.Group()
         self.virus_container = pygame.sprite.Group()
         self.bacteria_infected_container = pygame.sprite.Group()
         self.all_container = pygame.sprite.Group()
+
+        self.graphics = Graphics() # Load and prepare images
 
         self.n_susceptible = 20
         self.n_infected = 1
@@ -216,7 +307,6 @@ class Simulation:
 
         pygame.init()
         screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
-        pygame.display.set_caption('Symulacja rozwoju wirusa w koloniii bakteryjnej')
 
         for _ in range(self.n_susceptible):    # Spawn bacteria
             x = self.rng.integers(0, self.WIDTH, endpoint=True)
@@ -230,7 +320,7 @@ class Simulation:
             x = np.random.randint(0, self.WIDTH + 1)
             y = np.random.randint(0, self.HEIGHT + 1)
             vel = [0, 0]
-            guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=GREEN, velocity=vel)
+            guy = Dot(x, y, self.WIDTH, self.HEIGHT, color=col("green"), velocity=vel)
             self.susceptible_container.add(guy)
             self.all_container.add(guy)
         '''
@@ -239,16 +329,25 @@ class Simulation:
             x = self.rng.integers(0, self.WIDTH, endpoint=True)
             y = self.rng.integers(0, self.HEIGHT, endpoint=True)
             Virion(x, y, screen, containers=[self.virus_container,
-                                             self.all_container], rng=self.rng)
+                                             self.all_container],
+                                 graphics=self.graphics, rng=self.rng)
 
         clock = pygame.time.Clock()
 
         # Main loop
+        pause = False
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:    # If "X" button was clicked, end the program
                     sys.exit()
 
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_SPACE:
+                        pause = (pause + 1) %2
+
+            if pause:
+                clock.tick(10)
+                continue
 
             for sprite in self.all_container:    # Call .update() method on all sprites
                 action = sprite.update()
@@ -261,9 +360,10 @@ class Simulation:
                                                  sprite.rect.bottom,
                                                  endpoint=True),
                                screen,
-                               [self.virus_container, self.all_container])
+                               [self.virus_container, self.all_container],
+                               graphics=self.graphics)
 
-            screen.fill(BACKGROUND)        # Fill screen with background color (erases all objects)
+            screen.fill(self.bgcol)        # Fill screen with background color (erases all objects)
 
 
             ## New infections
@@ -273,7 +373,8 @@ class Simulation:
                 self.virus_container,
                 self.susceptible_container,
                 False,
-                True)    # removes bacteria that collided from suspectible_container
+                True,
+                precise_collision)    # removes bacteria that collided from suspectible_container
 
             for virus in collision_group:    # Loop over viruses that collided with anything
                 bacteria = collision_group[virus][0]    # Select first bacteria that collided and infect it
@@ -284,7 +385,17 @@ class Simulation:
 
                 virus.kill()
 
-            self.all_container.draw(screen)
+            self.susceptible_container.draw(screen)
+            self.bacteria_infected_container.draw(screen)
+            self.virus_container.draw(screen)
+
+            if self.debug:
+                for bact in self.susceptible_container:
+                    pygame.draw.rect(screen, col("green"), bact.colliderect, 1)
+                for bact in self.bacteria_infected_container:
+                    pygame.draw.rect(screen, col("yellow"), bact.colliderect, 1)
+                for virus in self.virus_container:
+                    pygame.draw.rect(screen, col("red"), virus.rect, 1)
 
             pygame.display.flip()
             clock.tick(30)
@@ -292,7 +403,11 @@ class Simulation:
 
 
 if __name__ == '__main__':
-    bacteriophage = Simulation()
+    debug = False
+    if len(sys.argv) > 1:
+        if "--debug" in sys.argv:   debug = True
+
+    bacteriophage = Simulation(debug=debug)
     bacteriophage.n_susceptible = 200
     #bacteriophage.n_quarantined = 0
     bacteriophage.n_infected = 3
