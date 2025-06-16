@@ -4,6 +4,7 @@ import numpy as np
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"    # Do not print pygame welcome message into console (has to be set before importing pygame)
 import pygame
+from pygame._sdl2.video import Window
 
 # List of colors:
 # python3 -c "import pygame; print('\\n'.join([i + '\\t\\t' + str(v) for i,v in pygame.color.THECOLORS.items()]))"
@@ -114,7 +115,9 @@ class Dot(pygame.sprite.Sprite):
 
 class Bacteria(Dot):
     def __init__(self, x, y, surface, containers, rng=None):
-        super().__init__(x, y, surface, 20, 20, containers, rng)
+        super().__init__(x, y, surface, 25, 25, containers, rng)
+
+        self.image.set_alpha(200)   # Make bacteria semi-transparent
 
         # Randomized shape
         R = pygame.Rect(0,0, self.rect.width, self.rect.height)
@@ -194,7 +197,45 @@ class Bacteria(Dot):
 
             if self.deathclock == 0:
                 self.kill()
-                return 1
+                return 1    # This informs main loop that virions & lysed bacteria must be spawned
+
+            self.deathclock -= 1
+
+class Lysed_bacteria(Dot):
+    def __init__(self, x, y, surface, containers, rng=None):
+        super().__init__(x, y, surface, 25, 25, containers, rng)
+
+        # Randomized positions of cell "fragments"
+        self.fragments = [self.rng.integers((2, 2), (self.rect.width-1, self.rect.height-1), size=2) for _ in range(10)]
+        self.shapes = [self.rng.choice(("circle", "rectangle")) for _ in range(10)]
+
+        self.__draw()
+
+        self.deathclock = self.rng.integers(100, 200, endpoint=True)
+
+    def __draw(self, color=col("yellow")):
+        self.image.fill((0,0,0,0))
+
+        for i in range(10):
+            f_x, f_y = self.fragments[i]
+
+            match self.shapes[i]:
+                case "circle":
+                    pygame.draw.circle(self.image,
+                                        color,
+                                        (f_x, f_y),
+                                        2, 2)
+
+                case "rectangle":
+                    pygame.draw.rect(self.image,
+                                        color,
+                                        pygame.Rect(f_x-1, f_y-1, 2, 2))
+
+    def update(self):
+        if self.deathclock != None:
+            if self.deathclock == 0:
+                self.kill()
+                return 0
 
             self.deathclock -= 1
 
@@ -270,7 +311,7 @@ class Virion(Dot):
 
 
 class Simulation:
-    def __init__(self, width=1600, height=900, debug=False):
+    def __init__(self, width=1600, height=900, screen=None, sys_size=None, debug=False):
 
         self.debug = debug
         self.rng = np.random.default_rng()
@@ -284,13 +325,30 @@ class Simulation:
         # Smh there is no actually very dark blue in pygame's set, so here's some dark aqua
         self.bgcol = (5, 30, 40, 255)
 
-        self.screen = pygame.display.set_mode((width, height), flags=pygame.HIDDEN)
+        if not screen:
+            self.screen = pygame.display.set_mode((width, height), flags=pygame.HIDDEN)
+            pygame.display.set_caption('Symulacja rozwoju wirusa w kolonii bakteryjnej')
+
+        else:
+            self.screen = screen
+            self.WIDTH, self.HEIGHT = screen.get_size()
+
+
+        # Place the window in the middle of screen
+        # Only necessary because subsequent calls on pygame.display.set_mode()
+        # for some reason relocate the window bit lower every time.
+        # And window moving every time you restart of course looks bad.
+        if sys_size:
+            scr_pos = ( (sys_size[0]-self.WIDTH)//2, (sys_size[1]-self.HEIGHT)//2 )
+            sys_window = Window.from_display_module()
+            sys_window.position = scr_pos
+
         self.screen.fill(self.bgcol)
-        pygame.display.set_caption('Symulacja rozwoju wirusa w kolonii bakteryjnej')
 
         self.susceptible_container = pygame.sprite.Group()
         self.virus_container = pygame.sprite.Group()
         self.bacteria_infected_container = pygame.sprite.Group()
+        self.dead_container = pygame.sprite.Group()
         self.all_container = pygame.sprite.Group()
 
         self.graphics = Graphics() # Load and prepare images
@@ -305,7 +363,6 @@ class Simulation:
 
         self.N = self.n_susceptible + self.n_infected #+ self.n_quarantined
 
-        pygame.init()
         screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
 
         for _ in range(self.n_susceptible):    # Spawn bacteria
@@ -345,6 +402,10 @@ class Simulation:
                     if event.key == pygame.K_SPACE:
                         pause = (pause + 1) %2
 
+                    elif event.key == pygame.K_RETURN:
+                        pygame.display.set_mode((self.WIDTH, self.HEIGHT), pygame.HIDDEN)
+                        return screen
+
             if pause:
                 clock.tick(10)
                 continue
@@ -352,7 +413,7 @@ class Simulation:
             for sprite in self.all_container:    # Call .update() method on all sprites
                 action = sprite.update()
                 if action and sprite.__class__ == Bacteria:
-                    for _ in range(self.rng.integers(2,6)):  # Spawn virions
+                    for _ in range(self.rng.integers(2,6)):  # Spawn virions & lysed bacteria
                         Virion(self.rng.integers(sprite.rect.left,
                                                  sprite.rect.right,
                                                  endpoint=True),
@@ -361,7 +422,12 @@ class Simulation:
                                                  endpoint=True),
                                screen,
                                [self.virus_container, self.all_container],
-                               graphics=self.graphics)
+                               graphics=self.graphics,
+                               rng=self.rng)
+
+                    Lysed_bacteria(sprite.pos[0], sprite.pos[1],
+                                    screen, [self.dead_container, self.all_container],
+                                    rng=self.rng)
 
             screen.fill(self.bgcol)        # Fill screen with background color (erases all objects)
 
@@ -385,6 +451,7 @@ class Simulation:
 
                 virus.kill()
 
+            self.dead_container.draw(screen)
             self.susceptible_container.draw(screen)
             self.bacteria_infected_container.draw(screen)
             self.virus_container.draw(screen)
@@ -399,7 +466,8 @@ class Simulation:
 
             pygame.display.flip()
             clock.tick(30)
-        pygame.quit()
+
+        return screen
 
 
 if __name__ == '__main__':
@@ -407,12 +475,19 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         if "--debug" in sys.argv:   debug = True
 
-    bacteriophage = Simulation(debug=debug)
-    bacteriophage.n_susceptible = 200
-    #bacteriophage.n_quarantined = 0
-    bacteriophage.n_infected = 3
-    #bacteriophage.cycle_to_fate = 150
-    #bacteriophage.mortality_rate = 0.8
-    #bacteriophage.virions_count = (1, 6)
-    #bacteriophage.virus_lifecycles_range = (200, 250)
-    bacteriophage.start()
+    pygame.init()
+    sys_screen = pygame.display.Info()
+    sys_size = (sys_screen.current_w, sys_screen.current_h)
+
+    screen = None
+    while True:
+        bacteriophage = Simulation(screen=screen, sys_size=sys_size, debug=debug)
+        bacteriophage.n_susceptible = 200
+        #bacteriophage.n_quarantined = 0
+        bacteriophage.n_infected = 3
+        #bacteriophage.cycle_to_fate = 150
+        #bacteriophage.mortality_rate = 0.8
+        #bacteriophage.virions_count = (1, 6)
+        #bacteriophage.virus_lifecycles_range = (200, 250)
+
+        screen = bacteriophage.start()
