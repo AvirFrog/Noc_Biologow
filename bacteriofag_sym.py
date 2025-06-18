@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import numpy as np
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"    # Do not print pygame welcome message into console (has to be set before importing pygame)
@@ -8,8 +9,12 @@ from pygame._sdl2.video import Window
 
 # List of colors:
 # python3 -c "import pygame; print('\\n'.join([i + '\\t\\t' + str(v) for i,v in pygame.color.THECOLORS.items()]))"
-def col(name):
-	return pygame.color.THECOLORS[name]
+def col(name, alpha=None):
+    color = pygame.color.THECOLORS[name]
+    if alpha != None:
+        color = tuple(list(color[:3]) + [alpha])
+
+    return color
 
 def precise_collision(sprite1, sprite2):
     hitbox1 = sprite1.rect
@@ -23,13 +28,91 @@ def precise_collision(sprite1, sprite2):
 
 # Class for compact storage of images
 class Graphics:
-    def __init__(self, path="Images/"):
-        # Import all images and convert them to same format as display surface, with alpha channel
+    def __init__(self, screen, path="Images/"):
+        # Default pygame font
+        self.font_large = font_large = pygame.font.Font(size=46)
+        self.font_small = font_small = pygame.font.Font(size=26)
 
+        ### Import all images and convert them to same format as display surface, with alpha channel
+        # Virion
         self.phage = pygame.image.load(path+"Bacteriophage.png")  # Virion image
         self.phage = self.phage.convert_alpha()
         self.phage = self.colorize(self.phage, col("red"))  # Color red
 
+        ### Other graphics
+        # Question mark button in top left corner
+        self.qmark = font_large.render("?", True, col("white"))
+        self.qmark.set_alpha(175)
+        self.qmark_pos = (10,10)
+        self.qmark_box = self.qmark.get_rect(topleft=self.qmark_pos)
+
+        ## Pause menu
+        self.pause = pygame.Surface((400, 300), pygame.SRCALPHA)
+
+        # Position of pause menu on screen
+        self.pause_pos = ( (screen.get_width()-self.pause.get_width())//2,
+                            (screen.get_height()-self.pause.get_height())//2 )
+
+        self.pause.fill(col("black", 0))
+        pygame.draw.rect(self.pause, col("antiquewhite4", 235),
+                            pygame.Rect((0,0), self.pause.get_size()),
+                            border_radius=20)
+        pygame.draw.rect(self.pause, col("antiquewhite2", 235),
+                            pygame.Rect(5,5, self.pause.get_width()-10, self.pause.get_height()-10),
+                            border_radius=16)
+
+        # Title on top of menu
+        p_text = "PAUSED"
+        p_pos = (self.center_surf(p_text, self.pause, font=font_large)[0], 20)
+
+        p_txt = font_large.render(p_text, True, col("black"))
+        self.pause.blit(p_txt, p_pos)
+
+        # Hints
+        h_pos = (20, 100)
+        h_texts = ["ESC : Exit program.",
+                    "SPACE : Pause/unpause the animation.",
+                    "ENTER : Restart the animation.",
+                    "+/- : (Debug) Change FPS limit."]
+
+        spacing = font_small.size(h_texts[0])[1] + 5
+        for i in range(len(h_texts)):
+            t = font_small.render(h_texts[i], True, col("black"))
+            self.pause.blit(t, (h_pos[0], h_pos[1] + i*spacing))
+
+        # Debug mode button
+        debug = pygame.Surface((300, 50), pygame.SRCALPHA)
+        debug_pos = ((self.pause.get_width()-10-debug.get_width())//2,
+                        (self.pause.get_height()-20-debug.get_height()))
+        debug_text = "Debug mode"
+
+        pygame.draw.rect(debug, col("antiquewhite4", 235),
+                            pygame.Rect((0,0), debug.get_size()), border_radius=10)
+        pygame.draw.rect(debug, col("antiquewhite3", 235),
+                            pygame.Rect(3,3,debug.get_width()-6, debug.get_height()-6), border_radius=8)
+        dbg = font_small.render(debug_text, True, col("black"))
+        debug.blit(dbg, self.center_surf(debug_text, debug))
+
+        self.pause.blit(debug, debug_pos)
+
+        self.debug_box = debug.get_rect(topleft=(self.pause_pos[0]+debug_pos[0],
+                                                    self.pause_pos[1]+debug_pos[1]))
+
+
+    # Calculates blit coordinates for text centered on given coordinates (pos)
+    def center_text(self, text, pos, font=None):
+        if font == None: font = self.font_small
+
+        size = font.size(text)
+        blit_pos = (pos[0] - size[0]//2, pos[1] - size[1]//2)
+
+        return blit_pos
+
+    # Version of the above that centers text in middle of a pygame.Surface
+    def center_surf(self, text, surface, font = None):
+        pos = (surface.get_width()//2, surface.get_height()//2)
+
+        return self.center_text(text, pos, font)
 
     @staticmethod
     def colorize(image, color): # Recolors image
@@ -311,9 +394,12 @@ class Virion(Dot):
 
 
 class Simulation:
-    def __init__(self, width=1600, height=900, screen=None, sys_size=None, debug=False):
+    def __init__(self, width=1600, height=900, screen=None, sys_size=None, settings=dict()):
 
-        self.debug = debug
+        self.debug = settings.get("debug", False)
+        self.tps = settings.get("tps", 30)
+
+        self.frame_log = []
         self.rng = np.random.default_rng()
 
         self.WIDTH = width	# window width
@@ -351,13 +437,62 @@ class Simulation:
         self.dead_container = pygame.sprite.Group()
         self.all_container = pygame.sprite.Group()
 
-        self.graphics = Graphics() # Load and prepare images
+        self.graphics = Graphics(self.screen) # Load and prepare images, fonts etc.
 
         self.n_susceptible = 20
         self.n_infected = 1
         #self.n_quarantined = 0
         #self.cycle_to_fate = 20
         #self.mortality_rate = 1
+
+
+    def draw(self, state=None):
+        screen = self.screen
+
+        screen.fill(self.bgcol)    # Fill screen with background color
+
+        self.dead_container.draw(screen)
+        self.susceptible_container.draw(screen)
+        self.bacteria_infected_container.draw(screen)
+        self.virus_container.draw(screen)
+
+        screen.blit(self.graphics.qmark, self.graphics.qmark_pos)
+
+        if self.debug:
+            for bact in self.susceptible_container:
+                pygame.draw.rect(screen, col("green"), bact.colliderect, 1)
+            for bact in self.bacteria_infected_container:
+                pygame.draw.rect(screen, col("yellow"), bact.colliderect, 1)
+            for virus in self.virus_container:
+                pygame.draw.rect(screen, col("red"), virus.rect, 1)
+
+            pygame.draw.rect(screen, col("blue"), self.graphics.qmark_box, 1)
+
+            fps_txt = f"{len(self.frame_log)} FPS"
+            fps = self.graphics.font_small.render(fps_txt, True, col("white"))
+            screen.blit(fps, (screen.get_width()-fps.get_width()-10, 10))
+
+            fps_set_txt = f"({self.tps})"
+            fps_set = self.graphics.font_small.render(fps_set_txt, True, col("white"))
+            screen.blit(fps_set, (screen.get_width()-fps.get_width()-10, 10+fps.get_height()))
+
+
+        if state == "pause":
+            screen.blit(self.graphics.pause, self.graphics.pause_pos)
+
+            if self.debug:
+                pygame.draw.rect(screen, col("blue"), self.graphics.debug_box, 1)
+
+        pygame.display.flip()
+
+        return
+
+    def tick(self, tps):
+        self.frame_log.append(time.time())
+        while (time.time() - self.frame_log[0]) > 1:
+            self.frame_log.pop(0)
+
+        self.clock.tick(tps)
 
     def start(self):
 
@@ -389,7 +524,7 @@ class Simulation:
                                              self.all_container],
                                  graphics=self.graphics, rng=self.rng)
 
-        clock = pygame.time.Clock()
+        self.clock = pygame.time.Clock()
 
         # Main loop
         pause = False
@@ -398,16 +533,38 @@ class Simulation:
                 if event.type == pygame.QUIT:    # If "X" button was clicked, end the program
                     sys.exit()
 
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE:
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        sys.exit()
+
+                    elif event.key == pygame.K_SPACE:
                         pause = (pause + 1) %2
 
                     elif event.key == pygame.K_RETURN:
                         pygame.display.set_mode((self.WIDTH, self.HEIGHT), pygame.HIDDEN)
-                        return screen
+                        return screen, {"debug":self.debug, "tps":self.tps}
+
+                    elif self.debug and event.key in [pygame.K_KP_MINUS, pygame.K_MINUS]:
+                        self.tps = max(5, self.tps-5)
+
+                    elif self.debug and event.key in [pygame.K_KP_PLUS, pygame.K_PLUS, pygame.K_EQUALS]:
+                        self.tps = min(40, self.tps+5)
+
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+
+                    # Clicked on question mark in top left
+                    if self.graphics.qmark_box.collidepoint(event.pos):
+                        pause = (pause + 1) %2
+
+                    # Clicked on debug mode button in pause menu
+                    elif pause and self.graphics.debug_box.collidepoint(event.pos):
+                        self.debug = bool((self.debug + 1) %2)
+                        self.tps = 30
 
             if pause:
-                clock.tick(10)
+                self.draw("pause")
+
+                self.tick(10)
                 continue
 
             for sprite in self.all_container:    # Call .update() method on all sprites
@@ -429,8 +586,6 @@ class Simulation:
                                     screen, [self.dead_container, self.all_container],
                                     rng=self.rng)
 
-            screen.fill(self.bgcol)        # Fill screen with background color (erases all objects)
-
 
             ## New infections
 
@@ -451,23 +606,10 @@ class Simulation:
 
                 virus.kill()
 
-            self.dead_container.draw(screen)
-            self.susceptible_container.draw(screen)
-            self.bacteria_infected_container.draw(screen)
-            self.virus_container.draw(screen)
+            self.draw()
+            self.tick(self.tps)
 
-            if self.debug:
-                for bact in self.susceptible_container:
-                    pygame.draw.rect(screen, col("green"), bact.colliderect, 1)
-                for bact in self.bacteria_infected_container:
-                    pygame.draw.rect(screen, col("yellow"), bact.colliderect, 1)
-                for virus in self.virus_container:
-                    pygame.draw.rect(screen, col("red"), virus.rect, 1)
-
-            pygame.display.flip()
-            clock.tick(30)
-
-        return screen
+        return screen, {"debug":self.debug, "tps":self.tps}
 
 
 if __name__ == '__main__':
@@ -478,10 +620,11 @@ if __name__ == '__main__':
     pygame.init()
     sys_screen = pygame.display.Info()
     sys_size = (sys_screen.current_w, sys_screen.current_h)
+    settings = {"debug":debug}
 
     screen = None
     while True:
-        bacteriophage = Simulation(screen=screen, sys_size=sys_size, debug=debug)
+        bacteriophage = Simulation(screen=screen, sys_size=sys_size, settings=settings)
         bacteriophage.n_susceptible = 200
         #bacteriophage.n_quarantined = 0
         bacteriophage.n_infected = 3
@@ -490,4 +633,4 @@ if __name__ == '__main__':
         #bacteriophage.virions_count = (1, 6)
         #bacteriophage.virus_lifecycles_range = (200, 250)
 
-        screen = bacteriophage.start()
+        screen, settings = bacteriophage.start()
