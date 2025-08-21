@@ -1,3 +1,7 @@
+# Authors:
+# Kacper Dudczak
+# Maciej Michalczyk
+# Jeremi Maciejewski
 import sys
 import os
 import time
